@@ -1,0 +1,38 @@
+---
+- name: Configure a user backup
+  hosts: all
+  become: true
+  tasks:
+    - name: Create the backup account
+      user:
+        name: backup-job
+        create_home: true
+
+    - name: Create the backup source
+      file:
+        path: /srv/borgbackup-user-test-source
+        state: directory
+        mode: '0755'
+
+    - name: Create the repository directory
+      file:
+        path: /srv/borgbackup-user-test-repository
+        state: directory
+        owner: backup-job
+        mode: '0700'
+
+    - name: Configure the user role  # noqa role-name[path]
+      include_role:
+        name: "{{ playbook_dir }}/../.."
+      vars:
+        borgbackup_user_name: backup-job
+        borgbackup_user_init_encryption: repokey
+        borgbackup_user_timer: daily
+        borgbackup_user_configs:
+          test-user:
+            source_directories: [/srv/borgbackup-user-test-source]
+            source_directories_must_exist: true
+            repositories:
+              - path: /srv/borgbackup-user-test-repository
+            encryption_passphrase: test-passphrase
+            keep_daily: 7

@@ -1,0 +1,23 @@
+---
+dependency:
+  name: galaxy
+driver:
+  name: docker
+platforms:
+  - name: borgbackup-user-ubuntu
+    image: docker-ubuntu2404-ansible:latest
+    command: sleep infinity
+  - name: borgbackup-user-debian
+    image: docker-debian13-ansible:latest
+    command: sleep infinity
+provisioner:
+  name: ansible
+  log: true
+  inventory:
+    host_vars:
+      borgbackup-user-ubuntu:
+        ansible_user: ansible
+      borgbackup-user-debian:
+        ansible_user: ansible
+verifier:
+  name: ansible

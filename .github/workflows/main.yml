@@ -1,0 +1,40 @@
+---
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+      - main
+  schedule:
+    - cron: "0 7 * * 2"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: yaml-lint
+        uses: ibiqlik/action-yamllint@v3
+      - name: Run ansible-lint
+        uses: ansible/ansible-lint@v26.11.1
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: molecule
+        uses: robertdebock/molecule-action@2.6.8
+
+  live-systemd:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Ansible
+        run: pip install 'ansible-core==2.16.3'
+      - name: Test live user manager and timer
+        run: ansible-playbook -i 'localhost,' -c local tests/live-systemd.yml

@@ -1,0 +1,194 @@
+---
+- name: Verify the user backup role
+  hosts: all
+  become: true
+  environment:
+    PATH: /tmp/borgbackup-user-test-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+  tasks:
+    - name: Check user configuration and unit files
+      stat:
+        path: "{{ item }}"
+      loop:
+        - /home/backup-job/.config/borgmatic.d/test-user.yml
+        - /home/backup-job/.config/systemd/user/borgmatic.service
+        - /home/backup-job/.config/systemd/user/borgmatic.timer
+      register: user_files
+
+    - name: Verify user ownership and configuration permissions
+      assert:
+        that:
+          - user_files.results[0].stat.pw_name == 'backup-job'
+          - user_files.results[0].stat.mode == '0600'
+          - user_files.results[1].stat.pw_name == 'backup-job'
+          - user_files.results[2].stat.pw_name == 'backup-job'
+
+    - name: Read user service and timer units
+      slurp:
+        src: "{{ item }}"
+      loop:
+        - /home/backup-job/.config/systemd/user/borgmatic.service
+        - /home/backup-job/.config/systemd/user/borgmatic.timer
+      register: user_units
+
+    - name: Verify the user units select the configuration and schedule
+      assert:
+        that:
+          - "(user_units.results[0].content | b64decode) is search('--config=\"/home/backup-job/.config/borgmatic.d\"')"
+          - "(user_units.results[1].content | b64decode) is search('OnCalendar=daily')"
+          - "(user_units.results[1].content | b64decode) is search('WantedBy=timers.target')"
+
+    - name: Check repository encryption and discovery
+      command: borgmatic --config /home/backup-job/.config/borgmatic.d rinfo --json
+      become: true
+      become_user: backup-job
+      environment:
+        HOME: /home/backup-job
+        XDG_CONFIG_HOME: /home/backup-job/.config
+      register: user_repository
+      changed_when: false
+
+    - name: Verify the initialized user repository
+      assert:
+        that:
+          - (user_repository.stdout | from_json)[0].encryption.mode == 'repokey'
+          - (user_repository.stdout | from_json)[0].repository.location == '/srv/borgbackup-user-test-repository'
+
+    - name: Run the user service command
+      command: borgmatic --config=/home/backup-job/.config/borgmatic.d --verbosity -1 --syslog-verbosity 1
+      become: true
+      become_user: backup-job
+      environment:
+        HOME: /home/backup-job
+        XDG_CONFIG_HOME: /home/backup-job/.config
+      changed_when: false
+
+    - name: List user archives
+      command: borgmatic --config /home/backup-job/.config/borgmatic.d rlist --json
+      become: true
+      become_user: backup-job
+      environment:
+        HOME: /home/backup-job
+      register: user_archives
+      changed_when: false
+
+    - name: Verify the backup created an archive
+      assert:
+        that:
+          - (user_archives.stdout | from_json)[0].archives | length > 0
+
+    - name: Create mock curl directory
+      file:
+        path: /tmp/borgbackup-user-test-bin
+        state: directory
+        mode: '0755'
+
+    - name: Create mock notification log
+      copy:
+        dest: /tmp/borgbackup-user-kuma-calls.log
+        content: ''
+        mode: '0666'
+
+    - name: Install mock curl
+      copy:
+        dest: /tmp/borgbackup-user-test-bin/curl
+        mode: '0755'
+        content: |
+          #!/bin/sh
+          printf '%s\n' "$*" >> /tmp/borgbackup-user-kuma-calls.log
+
+    - name: Configure user Kuma monitoring  # noqa role-name[path]
+      include_role:
+        name: "{{ playbook_dir }}/../.."
+      vars:
+        borgbackup_user_name: backup-job
+        borgbackup_user_init_encryption: repokey
+        borgbackup_user_timer: daily
+        borgbackup_user_kuma:
+          url: http://127.0.0.1:3001
+          repositories:
+            USER:
+              matcher: /srv/borgbackup-user-test-repository
+              token: user-test-token
+        borgbackup_user_configs:
+          test-user:
+            source_directories: [/srv/borgbackup-user-test-source]
+            source_directories_must_exist: true
+            repositories:
+              - path: /srv/borgbackup-user-test-repository
+            encryption_passphrase: test-passphrase
+            keep_daily: 7
+
+    - name: Check user Kuma files
+      stat:
+        path: "{{ item }}"
+      loop:
+        - /home/backup-job/.config/borgmatic.d/kuma.env
+        - /usr/local/sbin/borgmatic-user-kuma-push
+      register: kuma_files
+
+    - name: Verify Kuma secret and helper permissions
+      assert:
+        that:
+          - kuma_files.results[0].stat.pw_name == 'backup-job'
+          - kuma_files.results[0].stat.mode == '0600'
+          - kuma_files.results[1].stat.pw_name == 'root'
+          - kuma_files.results[1].stat.mode == '0755'
+
+    - name: List the user repository with Kuma configured
+      command: borgmatic --config /home/backup-job/.config/borgmatic.d rlist
+      become: true
+      become_user: backup-job
+      environment:
+        HOME: /home/backup-job
+      changed_when: false
+
+    - name: Read notifications after init and listing
+      slurp:
+        src: /tmp/borgbackup-user-kuma-calls.log
+      register: early_notifications
+
+    - name: Initialization and listing should not notify Kuma
+      assert:
+        that:
+          - early_notifications.content | b64decode | length == 0
+
+    - name: Run a user backup with Kuma configured
+      command: borgmatic --config /home/backup-job/.config/borgmatic.d create
+      become: true
+      become_user: backup-job
+      environment:
+        HOME: /home/backup-job
+      changed_when: false
+
+    - name: Remove disposable source to force a backup failure
+      file:
+        path: /srv/borgbackup-user-test-source
+        state: absent
+
+    - name: Run a failing user backup
+      command: borgmatic --config /home/backup-job/.config/borgmatic.d create
+      become: true
+      become_user: backup-job
+      environment:
+        HOME: /home/backup-job
+      register: backup_failure
+      changed_when: false
+      failed_when: false
+
+    - name: Restore disposable source
+      file:
+        path: /srv/borgbackup-user-test-source
+        state: directory
+        mode: '0755'
+
+    - name: Read backup notifications
+      slurp:
+        src: /tmp/borgbackup-user-kuma-calls.log
+      register: backup_notifications
+
+    - name: Verify success and failure notifications
+      assert:
+        that:
+          - backup_failure.rc != 0
+          - "(backup_notifications.content | b64decode) is search('status=up.*user-test-token')"
+          - "(backup_notifications.content | b64decode) is search('status=down.*user-test-token')"
