@@ -55,6 +55,7 @@
       become_user: backup-job
       environment: &user_environment
         HOME: /home/backup-job
+        XDG_CONFIG_HOME: /home/backup-job/.config
         XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts.getent_passwd['backup-job'][1] }}"
         DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ ansible_facts.getent_passwd['backup-job'][1] }}/bus"
       register: daily_schedule
